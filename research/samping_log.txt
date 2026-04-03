@@ -1,0 +1,23 @@
+Top 10 Sources
+x.com: 49,893,080
+reddit.com: 14,385,495
+bsky.app: 7,292,262
+youtube.com: 1,778,020
+4channel.org: 233,134
+jeuxvideo.com: 61,373
+forocoches.com: 55,683
+mastodon.social: 54,932
+news.ycombinator.com: 32,216
+investing.com: 29090
+
+Target sample per platform:
+x.com                → 675,921
+reddit.com           → 194,885
+bsky.app             → 98,790
+youtube.com          → 24,087
+4channel.org         → 3,158
+jeuxvideo.com        → 831
+forocoches.com       → 754
+mastodon.social      → 744
+news.ycombinator.com → 436
+investing.com        → 394
