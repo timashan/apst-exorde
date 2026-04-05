@@ -1,6 +1,6 @@
 # apst-exorde
 
-Event-scoped analysis on a platform-stratified sample from [Exorde/exorde-social-media-december-2024-week1](https://huggingface.co/datasets/Exorde/exorde-social-media-december-2024-week1). Core logic is in `exorde_analysis.py`; the notebook `analysis_events.ipynb` drives plots and tables.
+Event-scoped analysis on a platform-stratified sample from [Exorde/exorde-social-media-december-2024-week1](https://huggingface.co/datasets/Exorde/exorde-social-media-december-2024-week1). Core logic is in `exorde_analysis.py` (`exorde_topics.py` implements NMF helpers). Run `analysis_events.ipynb` for baseline event analysis; use `topic_modeling_sensitivity.ipynb` for NMF topics, document-level `doc_topics` tables, and `EVENTS_SENSITIVITY` vs baseline comparisons.
 
 ## Prerequisites
 
@@ -21,6 +21,8 @@ uv sync
 
 ```bash
 uv run jupyter notebook analysis_events.ipynb
+# optional: topic modeling + keyword sensitivity
+uv run jupyter notebook topic_modeling_sensitivity.ipynb
 ```
 
 Use `uv run jupyter lab` if you prefer Lab. Run all cells; the first full pass over the CSV can take a few minutes.

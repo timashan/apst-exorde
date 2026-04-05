@@ -1,6 +1,7 @@
 """
 Aggregations and statistics for Exorde stratified sample data.
-Used by analysis_events.ipynb — load with `pd.read_csv`, then `run_pipeline(df)`.
+Used by `analysis_events.ipynb` — load with `pd.read_csv`, then `run_pipeline(df)`.
+Use `EVENTS_SENSITIVITY` and `run_pipeline(df, events=...)` in `topic_modeling_sensitivity.ipynb`.
 """
 
 from __future__ import annotations
@@ -103,6 +104,78 @@ EVENTS: dict[str, dict[str, Any]] = {
     },
 }
 
+# Extended keyword lists for **sensitivity analysis** (v2). Baseline remains `EVENTS`.
+# Edit after reviewing NMF top terms in `topic_modeling_sensitivity.ipynb`; keep the same keys as `EVENTS`.
+EVENTS_SENSITIVITY: dict[str, dict[str, Any]] = {
+    "us_politics": {
+        "label": "US politics — keyword sensitivity v2 (extended terms)",
+        "keywords": [
+            *EVENTS["us_politics"]["keywords"],
+            "musk",
+            "senate",
+            "immigration",
+            "supreme court",
+            "maga",
+            "fbi",
+            "brics",
+        ],
+    },
+    "syria": {
+        "label": "Syria conflict — keyword sensitivity v2 (extended terms)",
+        "keywords": [
+            *EVENTS["syria"]["keywords"],
+            "offensive",
+            "turkey",
+            "kurds",
+            "hts",
+            "bashar",
+            "regime",
+            "sdf",
+            "sna",
+            "rebels",
+        ],
+    },
+    "romania": {
+        "label": "Romania — keyword sensitivity v2 (extended terms)",
+        "keywords": [
+            *EVENTS["romania"]["keywords"],
+            "constitutional",
+            "court",
+            "annul",
+            "election",
+            "georgescu",
+            "calin",
+            "romanian",
+            "rerun",
+            "interference",
+        ],
+    },
+    "sri_lanka": {
+        "label": "Sri Lanka / NPP — keyword sensitivity v2 (extended terms)",
+        "keywords": [
+            *EVENTS["sri_lanka"]["keywords"],
+            "election",
+            "president",
+            "vote",
+            "tamil",
+            "srilanka",
+            "lankan",
+        ],
+    },
+    "gaza_israel": {
+        "label": "Gaza / Israel — keyword sensitivity v2 (extended terms)",
+        "keywords": [
+            *EVENTS["gaza_israel"]["keywords"],
+            "rafah",
+            "hostage",
+            "humanitarian",
+            "settler",
+            "hezbollah",
+            "genocide",
+        ],
+    },
+}
+
 
 def get_platform(url: object) -> str:
     if not isinstance(url, str) or not url:
@@ -118,7 +191,28 @@ def _event_mask(blob: pd.Series, keywords: list[str]) -> pd.Series:
     return mask
 
 
-def run_pipeline(df: pd.DataFrame) -> dict[str, Any]:
+def text_blob_series(df: pd.DataFrame) -> pd.Series:
+    """Lowercased concat of `english_keywords` and `original_text` (matches pipeline)."""
+    return (
+        df["english_keywords"].fillna("").astype(str).str.lower()
+        + " "
+        + df["original_text"].fillna("").astype(str).str.lower()
+    )
+
+
+def event_keyword_mask(
+    df: pd.DataFrame, event_key: str, events: dict[str, dict[str, Any]] | None = None
+) -> pd.Series:
+    """True where the text blob matches the event's keyword substring rules."""
+    evs = EVENTS if events is None else events
+    return _event_mask(text_blob_series(df), evs[event_key]["keywords"])
+
+
+def run_pipeline(
+    df: pd.DataFrame, events: dict[str, dict[str, Any]] | None = None
+) -> dict[str, Any]:
+    """Aggregate by event. Pass `events=EVENTS_SENSITIVITY` (or another dict with the same keys) for a second-pass definition."""
+    evs = EVENTS if events is None else events
     rng = np.random.default_rng(RANDOM_SEED)
     MAX_URL_SAMPLE = 80_000
 
@@ -141,26 +235,26 @@ def run_pipeline(df: pd.DataFrame) -> dict[str, Any]:
             "day_lang": defaultdict(lambda: defaultdict(int)),
             "hour_plat": defaultdict(lambda: defaultdict(int)),
         }
-        for e in EVENTS
+        for e in evs
     }
     # Daily volume + sentiment per event
     ed_daily: dict[str, dict[str, dict[str, float]]] = {
-        e: defaultdict(lambda: {"n": 0, "sum_s": 0.0}) for e in EVENTS
+        e: defaultdict(lambda: {"n": 0, "sum_s": 0.0}) for e in evs
     }
     # Hourly volume + sentiment (UTC), for samples with few distinct calendar days
     ed_hourly: dict[str, dict[str, dict[str, float]]] = {
-        e: defaultdict(lambda: {"n": 0, "sum_s": 0.0}) for e in EVENTS
+        e: defaultdict(lambda: {"n": 0, "sum_s": 0.0}) for e in evs
     }
 
     # Reservoir: event -> platform -> list of sentiment
     reservoirs: dict[str, dict[str, list[float]]] = {
-        e: defaultdict(list) for e in EVENTS
+        e: defaultdict(list) for e in evs
     }
-    seen_ep: dict[str, dict[str, int]] = {e: defaultdict(int) for e in EVENTS}
+    seen_ep: dict[str, dict[str, int]] = {e: defaultdict(int) for e in evs}
 
     # Chi-square: event -> platform -> emotion -> count
     emo_plat: dict[str, defaultdict[str, defaultdict[str, int]]] = {
-        e: defaultdict(lambda: defaultdict(int)) for e in EVENTS
+        e: defaultdict(lambda: defaultdict(int)) for e in evs
     }
 
     plat = df["url"].map(get_platform) if "url" in df.columns else pd.Series(
@@ -187,11 +281,7 @@ def run_pipeline(df: pd.DataFrame) -> dict[str, Any]:
         if pd.notna(sent):
             daily_global[d]["sum_s"] += float(sent)
 
-    blob = (
-        df["english_keywords"].fillna("").astype(str).str.lower()
-        + " "
-        + df["original_text"].fillna("").astype(str).str.lower()
-    )
+    blob = text_blob_series(df)
 
     emo = df["main_emotion"].fillna("NA").astype(str) if "main_emotion" in df.columns else pd.Series(
         ["NA"] * len(df)
@@ -200,7 +290,7 @@ def run_pipeline(df: pd.DataFrame) -> dict[str, Any]:
         ["NA"] * len(df)
     )
 
-    for ev, spec in EVENTS.items():
+    for ev, spec in evs.items():
         mask = _event_mask(blob, spec["keywords"])
         if not mask.any():
             continue
@@ -257,8 +347,8 @@ def run_pipeline(df: pd.DataFrame) -> dict[str, Any]:
         ]
     )
 
-    event_n = {e: sum(ed_daily[e][dd]["n"] for dd in ed_daily[e]) for e in EVENTS}
-    event_pct = {e: 100.0 * event_n[e] / n_rows if n_rows else 0.0 for e in EVENTS}
+    event_n = {e: sum(ed_daily[e][dd]["n"] for dd in ed_daily[e]) for e in evs}
+    event_pct = {e: 100.0 * event_n[e] / n_rows if n_rows else 0.0 for e in evs}
 
     return {
         "n_rows": n_rows,
@@ -277,6 +367,7 @@ def run_pipeline(df: pd.DataFrame) -> dict[str, Any]:
         "event_pct": event_pct,
         "dup_rate_url_subsample": dup_rate,
         "url_subsample_size": len(url_dup_sample),
+        "events_definition": "baseline" if events is None else "custom",
     }
 
 
