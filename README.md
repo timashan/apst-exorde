@@ -15,7 +15,7 @@ uv sync
 
 ## Run the analysis
 
-1. **CSV path** — The notebook sets `CSV_PATH = Path("stratified_sample_1M.csv")`. If your file is `data/stratified_sample_1M.csv`, change that line to `Path("data/stratified_sample_1M.csv")` (or copy/symlink the file to the repo root).
+1. **CSV path** — The notebook sets `CSV_PATH = Path("data/stratified_sample_1M.csv")`.
 
 2. **Start Jupyter** from the repository root so imports resolve:
 

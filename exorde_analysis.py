@@ -1,6 +1,6 @@
 """
-Chunked aggregations and statistics for Exorde stratified sample CSV.
-Used by analysis_events.ipynb — keeps the notebook readable.
+Aggregations and statistics for Exorde stratified sample data.
+Used by analysis_events.ipynb — load with `pd.read_csv`, then `run_pipeline(df)`.
 """
 
 from __future__ import annotations
@@ -22,7 +22,6 @@ from sklearn.preprocessing import StandardScaler
 # ---------------------------------------------------------------------------
 
 RANDOM_SEED = 42
-CHUNK_SIZE = 50_000
 MAX_SENTIMENT_PER_PLATFORM = 12_000  # per event, for plots/tests
 TOP_PLATFORMS_PLOT = 8
 TOP_LANG_PLOT = 10
@@ -119,12 +118,13 @@ def _event_mask(blob: pd.Series, keywords: list[str]) -> pd.Series:
     return mask
 
 
-def run_chunked_pipeline(csv_path: str, chunk_size: int = CHUNK_SIZE) -> dict[str, Any]:
+def run_pipeline(df: pd.DataFrame) -> dict[str, Any]:
     rng = np.random.default_rng(RANDOM_SEED)
+    MAX_URL_SAMPLE = 80_000
 
-    n_rows = 0
-    sentiment_missing = 0
-    url_missing = 0
+    n_rows = len(df)
+    sentiment_missing = int(df["sentiment"].isna().sum()) if "sentiment" in df.columns else 0
+    url_missing = int(df["url"].isna().sum()) if "url" in df.columns else 0
     theme_counts: Counter[str] = Counter()
     lang_counts: Counter[str] = Counter()
     platform_counts: Counter[str] = Counter()
@@ -163,107 +163,87 @@ def run_chunked_pipeline(csv_path: str, chunk_size: int = CHUNK_SIZE) -> dict[st
         e: defaultdict(lambda: defaultdict(int)) for e in EVENTS
     }
 
-    # Duplicate check on URL (first chunk sample extended by reservoir of urls)
-    url_dup_sample: list[str] = []
-    MAX_URL_SAMPLE = 80_000
+    plat = df["url"].map(get_platform) if "url" in df.columns else pd.Series(
+        ["missing"] * len(df)
+    )
+    platform_counts.update(plat.value_counts().to_dict())
 
-    reader = pd.read_csv(
-        csv_path,
-        chunksize=chunk_size,
-        on_bad_lines="skip",
+    if "primary_theme" in df.columns:
+        theme_counts.update(df["primary_theme"].fillna("NA").astype(str).value_counts().to_dict())
+    if "language" in df.columns:
+        lang_counts.update(df["language"].fillna("NA").astype(str).value_counts().to_dict())
+
+    dt = pd.to_datetime(df["date"], utc=True, errors="coerce")
+    day = dt.dt.strftime("%Y-%m-%d")
+    hour = dt.dt.floor("h").dt.strftime("%Y-%m-%d %H:00")
+
+    s = pd.to_numeric(df["sentiment"], errors="coerce")
+
+    # Global daily
+    for d, sent in zip(day, s):
+        if pd.isna(d):
+            continue
+        daily_global[d]["n"] += 1
+        if pd.notna(sent):
+            daily_global[d]["sum_s"] += float(sent)
+
+    blob = (
+        df["english_keywords"].fillna("").astype(str).str.lower()
+        + " "
+        + df["original_text"].fillna("").astype(str).str.lower()
     )
 
-    for chunk in reader:
-        n_rows += len(chunk)
-        if "sentiment" in chunk.columns:
-            sentiment_missing += chunk["sentiment"].isna().sum()
-        if "url" in chunk.columns:
-            url_missing += chunk["url"].isna().sum()
+    emo = df["main_emotion"].fillna("NA").astype(str) if "main_emotion" in df.columns else pd.Series(
+        ["NA"] * len(df)
+    )
+    lang = df["language"].fillna("NA").astype(str) if "language" in df.columns else pd.Series(
+        ["NA"] * len(df)
+    )
 
-        plat = chunk["url"].map(get_platform) if "url" in chunk.columns else pd.Series(
-            ["missing"] * len(chunk)
-        )
-        platform_counts.update(plat.value_counts().to_dict())
+    for ev, spec in EVENTS.items():
+        mask = _event_mask(blob, spec["keywords"])
+        if not mask.any():
+            continue
+        plat_m = plat[mask]
+        day_m = day[mask]
+        hour_m = hour[mask]
+        s_m = s[mask]
+        emo_m = emo[mask]
+        lang_m = lang[mask]
 
-        if "primary_theme" in chunk.columns:
-            theme_counts.update(chunk["primary_theme"].fillna("NA").astype(str).value_counts().to_dict())
-        if "language" in chunk.columns:
-            lang_counts.update(chunk["language"].fillna("NA").astype(str).value_counts().to_dict())
-
-        dt = pd.to_datetime(chunk["date"], utc=True, errors="coerce")
-        day = dt.dt.strftime("%Y-%m-%d")
-        hour = dt.dt.floor("h").dt.strftime("%Y-%m-%d %H:00")
-
-        s = pd.to_numeric(chunk["sentiment"], errors="coerce")
-
-        # Global daily
-        for d, sent in zip(day, s):
+        for p, d, h, sent, emotion, la in zip(plat_m, day_m, hour_m, s_m, emo_m, lang_m):
             if pd.isna(d):
                 continue
-            daily_global[d]["n"] += 1
+            ed[ev]["day_plat"][d][p] += 1
+            ed[ev]["day_lang"][d][la] += 1
+            if pd.notna(h):
+                ed[ev]["hour_plat"][h][p] += 1
+            ed_daily[ev][d]["n"] += 1
             if pd.notna(sent):
-                daily_global[d]["sum_s"] += float(sent)
-
-        blob = (
-            chunk["english_keywords"].fillna("").astype(str).str.lower()
-            + " "
-            + chunk["original_text"].fillna("").astype(str).str.lower()
-        )
-
-        emo = chunk["main_emotion"].fillna("NA").astype(str) if "main_emotion" in chunk.columns else pd.Series(
-            ["NA"] * len(chunk)
-        )
-        lang = chunk["language"].fillna("NA").astype(str) if "language" in chunk.columns else pd.Series(
-            ["NA"] * len(chunk)
-        )
-
-        for ev, spec in EVENTS.items():
-            mask = _event_mask(blob, spec["keywords"])
-            if not mask.any():
-                continue
-            sub = mask
-            plat_m = plat[sub]
-            day_m = day[sub]
-            hour_m = hour[sub]
-            s_m = s[sub]
-            emo_m = emo[sub]
-            lang_m = lang[sub]
-
-            for p, d, h, sent, emotion, la in zip(plat_m, day_m, hour_m, s_m, emo_m, lang_m):
-                if pd.isna(d):
-                    continue
-                ed[ev]["day_plat"][d][p] += 1
-                ed[ev]["day_lang"][d][la] += 1
-                if pd.notna(h):
-                    ed[ev]["hour_plat"][h][p] += 1
-                ed_daily[ev][d]["n"] += 1
+                ed_daily[ev][d]["sum_s"] += float(sent)
+            if pd.notna(h):
+                ed_hourly[ev][h]["n"] += 1
                 if pd.notna(sent):
-                    ed_daily[ev][d]["sum_s"] += float(sent)
-                if pd.notna(h):
-                    ed_hourly[ev][h]["n"] += 1
-                    if pd.notna(sent):
-                        ed_hourly[ev][h]["sum_s"] += float(sent)
-                emo_plat[ev][p][emotion] += 1
+                    ed_hourly[ev][h]["sum_s"] += float(sent)
+            emo_plat[ev][p][emotion] += 1
 
-                # Reservoir sampling for sentiment by platform (skip missing sentiment)
-                if pd.isna(sent):
-                    continue
-                key = p
-                seen_ep[ev][key] += 1
-                k = seen_ep[ev][key]
-                rs = reservoirs[ev][key]
-                fv = float(sent)
-                if len(rs) < MAX_SENTIMENT_PER_PLATFORM:
-                    rs.append(fv)
-                else:
-                    j = int(rng.integers(0, k))
-                    if j < MAX_SENTIMENT_PER_PLATFORM:
-                        rs[j] = fv
+            if pd.isna(sent):
+                continue
+            key = p
+            seen_ep[ev][key] += 1
+            k = seen_ep[ev][key]
+            rs = reservoirs[ev][key]
+            fv = float(sent)
+            if len(rs) < MAX_SENTIMENT_PER_PLATFORM:
+                rs.append(fv)
+            else:
+                j = int(rng.integers(0, k))
+                if j < MAX_SENTIMENT_PER_PLATFORM:
+                    rs[j] = fv
 
-        # URL sample for duplicate rate
-        if "url" in chunk.columns and len(url_dup_sample) < MAX_URL_SAMPLE:
-            take = min(MAX_URL_SAMPLE - len(url_dup_sample), len(chunk))
-            url_dup_sample.extend(chunk["url"].head(take).dropna().astype(str).tolist())
+    url_dup_sample: list[str] = []
+    if "url" in df.columns:
+        url_dup_sample = df["url"].head(MAX_URL_SAMPLE).dropna().astype(str).tolist()
 
     dup_rate = 0.0
     if url_dup_sample:
@@ -282,8 +262,8 @@ def run_chunked_pipeline(csv_path: str, chunk_size: int = CHUNK_SIZE) -> dict[st
 
     return {
         "n_rows": n_rows,
-        "sentiment_missing": int(sentiment_missing),
-        "url_missing": int(url_missing),
+        "sentiment_missing": sentiment_missing,
+        "url_missing": url_missing,
         "theme_counts": theme_counts,
         "lang_counts": lang_counts,
         "platform_counts": platform_counts,
