@@ -212,3 +212,75 @@ def run_nmf_topics_all_events(
     """Run `run_nmf_topics` for every key in `events` (default: baseline `EVENTS`)."""
     evs = EVENTS if events is None else events
     return {ek: run_nmf_topics(df, ek, events=evs, **kwargs) for ek in evs}
+
+
+def topic_time_counts(
+    doc_topics: pd.DataFrame,
+    *,
+    freq: str = "D",
+    time_col: str = "date",
+    topic_col: str = "topic_id",
+) -> pd.DataFrame:
+    """Aggregate document-level NMF topic assignments into time buckets.
+
+    Parameters
+    ----------
+    doc_topics:
+        DataFrame returned by `run_nmf_topics(..., return_doc_topics=True)`.
+    freq:
+        Pandas offset alias such as "D" for daily or "h" for hourly buckets.
+
+    Returns one row per time bucket and topic, with raw counts and two useful
+    proportions: `share_within_time` and `share_within_topic`.
+    """
+    missing = [c for c in (time_col, topic_col) if c not in doc_topics.columns]
+    if missing:
+        raise KeyError(f"doc_topics is missing required columns: {missing}")
+
+    work = doc_topics[[time_col, topic_col]].copy()
+    work[time_col] = pd.to_datetime(work[time_col], utc=True, errors="coerce")
+    work = work.dropna(subset=[time_col, topic_col])
+    if work.empty:
+        return pd.DataFrame(
+            columns=[
+                "time_bucket",
+                topic_col,
+                "n",
+                "total_in_time",
+                "total_in_topic",
+                "share_within_time",
+                "share_within_topic",
+            ]
+        )
+
+    work["time_bucket"] = work[time_col].dt.floor(freq)
+    counts = (
+        work.groupby(["time_bucket", topic_col], observed=False)
+        .size()
+        .reset_index(name="n")
+        .sort_values(["time_bucket", topic_col])
+        .reset_index(drop=True)
+    )
+    counts["total_in_time"] = counts.groupby("time_bucket", observed=False)["n"].transform("sum")
+    counts["total_in_topic"] = counts.groupby(topic_col, observed=False)["n"].transform("sum")
+    counts["share_within_time"] = counts["n"] / counts["total_in_time"]
+    counts["share_within_topic"] = counts["n"] / counts["total_in_topic"]
+    return counts
+
+
+def topic_time_matrix(
+    doc_topics: pd.DataFrame,
+    *,
+    freq: str = "D",
+    value: str = "n",
+    fill_value: float = 0.0,
+) -> pd.DataFrame:
+    """Return a time-bucket x topic matrix for heatmaps or line plots."""
+    counts = topic_time_counts(doc_topics, freq=freq)
+    if counts.empty:
+        return pd.DataFrame()
+    return (
+        counts.pivot(index="time_bucket", columns="topic_id", values=value)
+        .fillna(fill_value)
+        .sort_index()
+    )
